@@ -16,7 +16,7 @@ from student_success_copilot.cli import run_cli
 
 
 def main() -> None:
-    """Start the command-line application."""
+    """Start the command-line app."""
     run_cli()
 
 

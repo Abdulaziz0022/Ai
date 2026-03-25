@@ -1,31 +1,60 @@
-"""Basic pipeline that connects input, validation, question loop, and output."""
+"""Main orchestration pipeline for Student Success Copilot."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
-from student_success_copilot import config
+from student_success_copilot.explainer import (
+    generate_final_explanation,
+    summarize_planning_results,
+    summarize_reasoning_trace,
+)
 from student_success_copilot.models.student_profile import StudentProfile
-from student_success_copilot.models.study_plan import StudySession, WeeklyStudyPlan
+from student_success_copilot.models.study_plan import WeeklyStudyPlan
+from student_success_copilot.planning.search_planner import (
+    PlanningResult,
+    compare_strategies,
+)
+from student_success_copilot.planning.state import PlanningState
 from student_success_copilot.question_loop import run_question_loop
+from student_success_copilot.reasoning.facts import FactStrengths, build_initial_facts
+from student_success_copilot.reasoning.forward_chain import (
+    ForwardChainingResult,
+    forward_chain,
+)
+from student_success_copilot.risk_assessor import RiskAssessmentResult, assess_risk
 from student_success_copilot.validator import ValidationResult, validate_profile
+
+if TYPE_CHECKING:
+    from student_success_copilot.ml.evaluate import EvaluationResult
+    from student_success_copilot.ml.predict import PredictionResult
+    from student_success_copilot.ml.train import TrainedRiskModel
 
 
 @dataclass
 class PipelineResult:
-    """Container for the main outputs of the starter pipeline."""
+    """Container for the main outputs of the integrated pipeline."""
 
     profile: StudentProfile
     validation_result: ValidationResult
     question_history: list[str] = field(default_factory=list)
     study_plan: WeeklyStudyPlan = field(default_factory=WeeklyStudyPlan)
     risk_level: str = "Medium"
+    rule_risk_level: str = "Medium"
+    ml_risk_level: str | None = None
     recommendations: list[str] = field(default_factory=list)
     explanation: str = ""
+    reasoning_trace: list[str] = field(default_factory=list)
+    proof_summary: list[str] = field(default_factory=list)
+    planning_summary: list[str] = field(default_factory=list)
+    risk_reasons: list[str] = field(default_factory=list)
+    disagreement_note: str = ""
+    ml_summary: list[str] = field(default_factory=list)
 
 
 def run_copilot(profile: StudentProfile) -> PipelineResult:
-    """Run a minimal end-to-end flow for the starter project."""
+    """Run the full coursework-friendly workflow."""
     validation_result = validate_profile(profile)
     question_history: list[str] = []
 
@@ -33,194 +62,158 @@ def run_copilot(profile: StudentProfile) -> PipelineResult:
         profile, question_history = run_question_loop(profile, validation_result)
         validation_result = validate_profile(profile)
 
-    study_plan = create_placeholder_plan(profile)
-    risk_level = estimate_placeholder_risk(profile)
-    recommendations = build_placeholder_recommendations(profile, validation_result)
-    explanation = generate_placeholder_explanation(
+    initial_facts = build_initial_facts(profile)
+    reasoning_result = forward_chain(initial_facts)
+
+    planning_results = _build_plans(profile)
+    selected_plan_result = _choose_plan_result(planning_results)
+    planning_summary = summarize_planning_results(planning_results)
+
+    ml_prediction, ml_summary = _run_ml_prediction(profile)
+    risk_assessment = assess_risk(initial_facts, reasoning_result, ml_prediction)
+
+    recommendations = _build_recommendations(reasoning_result, risk_assessment)
+    reasoning_trace = summarize_reasoning_trace(reasoning_result)
+    proof_summary = list(risk_assessment.proof_summary)
+
+    explanation = generate_final_explanation(
         profile=profile,
-        risk_level=risk_level,
         validation_result=validation_result,
+        question_history=question_history,
+        risk_assessment=risk_assessment,
+        study_plan=selected_plan_result.weekly_plan,
         recommendations=recommendations,
+        planning_summary=planning_summary,
     )
 
     return PipelineResult(
         profile=profile,
         validation_result=validation_result,
         question_history=question_history,
-        study_plan=study_plan,
-        risk_level=risk_level,
+        study_plan=selected_plan_result.weekly_plan,
+        risk_level=risk_assessment.final_risk,
+        rule_risk_level=risk_assessment.rule_risk,
+        ml_risk_level=risk_assessment.ml_risk,
         recommendations=recommendations,
         explanation=explanation,
+        reasoning_trace=reasoning_trace,
+        proof_summary=proof_summary,
+        planning_summary=planning_summary,
+        risk_reasons=list(risk_assessment.reasons),
+        disagreement_note=risk_assessment.disagreement_note,
+        ml_summary=ml_summary,
     )
 
 
-def create_placeholder_plan(profile: StudentProfile) -> WeeklyStudyPlan:
-    """Create a simple study plan without full search-based planning yet."""
-    plan = WeeklyStudyPlan()
-    remaining_hours = dict(profile.availability)
-
-    if not remaining_hours:
-        remaining_hours = {"Monday": 2.0}
-
-    if not profile.tasks:
-        first_day = next(iter(remaining_hours))
-        plan.add_session(
-            StudySession(
-                day=first_day,
-                task_title="General revision",
-                hours=1.0,
-                notes="Placeholder session because no tasks were provided.",
-            )
+def _build_plans(profile: StudentProfile) -> list[PlanningResult]:
+    """Run the search planner strategies and fall back safely if needed."""
+    try:
+        return compare_strategies(profile)
+    except Exception as error:  # pragma: no cover - defensive fallback
+        fallback_plan = WeeklyStudyPlan()
+        fallback_plan.notes.append(f"Planning fallback used because of an error: {error}")
+        fallback_state = PlanningState(
+            remaining_task_hours=tuple(),
+            available_day_hours=tuple(),
         )
-        return plan
-
-    days = list(remaining_hours.keys())
-
-    for task in profile.tasks:
-        hours_left = max(task.estimated_hours, 1.0)
-
-        for day in days:
-            free_hours = remaining_hours.get(day, 0.0)
-            if free_hours <= 0:
-                continue
-
-            planned_hours = min(
-                free_hours,
-                hours_left,
-                config.DEFAULT_SESSION_LENGTH_HOURS,
+        return [
+            PlanningResult(
+                strategy="astar",
+                final_state=fallback_state,
+                weekly_plan=fallback_plan,
+                explored_states=0,
+                goal_reached=False,
             )
+        ]
 
-            plan.add_session(
-                StudySession(
-                    day=day,
-                    task_title=task.title,
-                    hours=planned_hours,
-                    notes=f"Target deadline: {task.deadline}",
-                )
-            )
 
-            remaining_hours[day] -= planned_hours
-            hours_left -= planned_hours
+def _choose_plan_result(planning_results: list[PlanningResult]) -> PlanningResult:
+    """Prefer A* when available, otherwise use the first available result."""
+    for result in planning_results:
+        if result.strategy.lower() == "astar":
+            return result
+    return planning_results[0]
 
-            if hours_left <= 0:
-                break
 
-        if hours_left > 0:
-            plan.notes.append(
-                f"Not enough free time to fully schedule '{task.title}'. "
-                f"{hours_left:.1f} hour(s) remain unscheduled."
-            )
+def _run_ml_prediction(profile: StudentProfile) -> tuple[Any | None, list[str]]:
+    """Train the ML model, evaluate it, and predict risk for one student."""
+    summary: list[str] = []
 
-    if not plan.notes:
-        plan.notes.append(
-            "This is a starter schedule using simple placeholder logic."
+    try:
+        from student_success_copilot.ml.evaluate import evaluate_model
+        from student_success_copilot.ml.predict import predict_risk
+        from student_success_copilot.ml.train import train_risk_model
+
+        trained_model = train_risk_model()
+        evaluation = evaluate_model(trained_model)
+        prediction = predict_risk(trained_model, profile)
+    except Exception as error:  # pragma: no cover - defensive fallback
+        summary.append(
+            "ML prediction unavailable, so the final decision fell back to rule-based reasoning."
         )
+        summary.append(f"Training or prediction error: {error}")
+        return None, summary
 
-    return plan
-
-
-def estimate_placeholder_risk(profile: StudentProfile) -> str:
-    """Estimate a simple risk label using beginner-friendly placeholder rules."""
-    score = 0
-    total_workload = profile.total_workload_hours()
-    total_availability = profile.total_available_hours()
-
-    if profile.stress is not None:
-        if profile.stress >= 8:
-            score += 2
-        elif profile.stress >= 6:
-            score += 1
-
-    if profile.confidence is not None:
-        if profile.confidence <= 4:
-            score += 2
-        elif profile.confidence <= 6:
-            score += 1
-
-    if total_workload > total_availability + 2:
-        score += 2
-    elif total_workload > total_availability:
-        score += 1
-
-    if profile.quiz_score is not None:
-        if profile.quiz_score < 50:
-            score += 2
-        elif profile.quiz_score < 70:
-            score += 1
-
-    if profile.attendance is not None and profile.attendance < 70:
-        score += 1
-
-    if score >= 5:
-        return "High"
-    if score >= 3:
-        return "Medium"
-    return "Low"
+    summary.extend(_build_ml_summary(prediction, trained_model, evaluation))
+    return prediction, summary
 
 
-def build_placeholder_recommendations(
-    profile: StudentProfile,
-    validation_result: ValidationResult,
+def _build_ml_summary(
+    prediction: "PredictionResult",
+    trained_model: "TrainedRiskModel",
+    evaluation: "EvaluationResult",
 ) -> list[str]:
-    """Generate simple recommendations until the real AI modules are added."""
-    recommendations: list[str] = []
+    """Create short ML summary lines for the CLI."""
+    probability_text = ", ".join(
+        f"{label} {probability:.2f}"
+        for label, probability in prediction.probabilities.items()
+    )
 
-    if validation_result.missing_fields:
-        recommendations.append("Fill in any remaining missing study information.")
+    return [
+        "ML model: logistic regression trained on historical_students.csv.",
+        f"ML prediction for this student: {prediction.predicted_risk}.",
+        f"Prediction probabilities: {probability_text or 'Not available.'}",
+        (
+            "Model evaluation on the held-out test set: "
+            f"accuracy {evaluation.accuracy:.2f}, precision {evaluation.precision:.2f}, "
+            f"recall {evaluation.recall:.2f}, F1 {evaluation.f1_score:.2f}."
+        ),
+        f"Training examples used: {len(trained_model.X_train) + len(trained_model.X_test)}.",
+    ]
 
-    if profile.total_workload_hours() > profile.total_available_hours():
+
+def _build_recommendations(
+    reasoning_result: ForwardChainingResult,
+    risk_assessment: RiskAssessmentResult,
+) -> list[str]:
+    """Merge recommendation facts with a small fallback recommendation."""
+    recommendations = reasoning_result.get_recommendations()
+
+    if risk_assessment.final_risk == "High":
         recommendations.append(
-            "Your workload is higher than your free time. Reduce scope or add study hours."
+            "Check your most urgent tasks first and ask for support early if the workload still feels too high."
         )
-
-    if profile.stress is not None and profile.stress >= config.HIGH_STRESS_THRESHOLD:
+    elif risk_assessment.final_risk == "Medium":
         recommendations.append(
-            "Plan shorter study blocks and include short breaks to manage stress."
-        )
-
-    if profile.confidence is not None and profile.confidence <= config.LOW_CONFIDENCE_THRESHOLD:
-        recommendations.append(
-            "Start with easier topics first to rebuild confidence."
-        )
-
-    if profile.quiz_score is not None and profile.quiz_score < 60:
-        recommendations.append(
-            "Add a revision session focused on weak quiz topics."
+            "Review progress mid-week so you can adjust the plan before deadlines become urgent."
         )
 
     if not recommendations:
         recommendations.append(
-            "Keep following a steady study routine and review progress each week."
+            "Keep following the weekly plan and review your progress at the end of the week."
         )
 
-    return recommendations
+    return _unique(recommendations)
 
 
-def generate_placeholder_explanation(
-    profile: StudentProfile,
-    risk_level: str,
-    validation_result: ValidationResult,
-    recommendations: list[str],
-) -> str:
-    """Create a short explanation for the starter version."""
-    parts = [
-        f"The current risk level is {risk_level}.",
-        (
-            f"You have {len(profile.tasks)} task(s), "
-            f"{profile.total_workload_hours():.1f} estimated workload hour(s), and "
-            f"{profile.total_available_hours():.1f} available study hour(s)."
-        ),
-    ]
+def _unique(items: list[str]) -> list[str]:
+    """Return items in order without duplicates."""
+    seen: set[str] = set()
+    ordered: list[str] = []
 
-    if validation_result.contradictions:
-        parts.append(
-            "Some answers looked inconsistent, so the system asked follow-up questions."
-        )
+    for item in items:
+        if item not in seen:
+            ordered.append(item)
+            seen.add(item)
 
-    parts.append(
-        "These recommendations come from simple placeholder checks and will later be "
-        "replaced by search, rule-based reasoning, and machine learning components."
-    )
-    parts.append(f"Top recommendation: {recommendations[0]}")
-
-    return " ".join(parts)
+    return ordered

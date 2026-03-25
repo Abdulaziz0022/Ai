@@ -61,12 +61,14 @@ def get_default_sample_data() -> dict:
                 "deadline": "Friday",
                 "estimated_hours": 4,
                 "priority": 3,
+                "days_left": 3,
             },
             {
                 "title": "Programming quiz revision",
                 "deadline": "Thursday",
                 "estimated_hours": 3,
                 "priority": 2,
+                "days_left": 2,
             },
         ],
         "availability": {
@@ -94,7 +96,11 @@ def _collect_tasks() -> list[Task]:
         print()
         print(f"Task {index + 1}")
         title = input("Title: ").strip() or f"Task {index + 1}"
-        deadline = input("Deadline (for example Friday or 2026-03-25): ").strip() or "Unknown"
+        deadline = (
+            input("Deadline label or date (for example Friday or 2026-03-25): ").strip()
+            or "Unknown"
+        )
+        days_left = _prompt_optional_int("How many days are left until this deadline? ")
         estimated_hours = _prompt_optional_float("Estimated hours: ") or 1.0
         priority = _prompt_optional_int("Priority (1-3, optional): ") or 2
         tasks.append(
@@ -103,6 +109,7 @@ def _collect_tasks() -> list[Task]:
                 deadline=deadline,
                 estimated_hours=estimated_hours,
                 priority=priority,
+                days_left=days_left,
             )
         )
 

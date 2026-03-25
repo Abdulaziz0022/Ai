@@ -12,7 +12,26 @@ class StudySession:
     day: str
     task_title: str
     hours: float
-    notes: str = ""
+    deadline: str = ""
+    priority: int | None = None
+    days_left_display: int | None = None
+
+    def to_display_line(self) -> str:
+        """Return one user-friendly display line for the terminal."""
+        line = f"{self.day}: {self.task_title} for {self.hours:.1f} hour(s)"
+
+        details: list[str] = []
+        if self.deadline:
+            details.append(f"Deadline: {self.deadline}")
+        if self.priority is not None:
+            details.append(f"priority {self.priority}")
+        if self.days_left_display is not None:
+            details.append(f"days left {self.days_left_display}")
+
+        if details:
+            line += f" [{' ; '.join(details).replace(' ;', ';')}]"
+
+        return line
 
 
 @dataclass
@@ -32,10 +51,4 @@ class WeeklyStudyPlan:
 
     def to_display_lines(self) -> list[str]:
         """Return user-friendly lines for terminal display."""
-        lines: list[str] = []
-        for session in self.sessions:
-            line = f"{session.day}: {session.task_title} for {session.hours:.1f} hour(s)"
-            if session.notes:
-                line += f" [{session.notes}]"
-            lines.append(line)
-        return lines
+        return [session.to_display_line() for session in self.sessions]

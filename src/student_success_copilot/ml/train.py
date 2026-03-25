@@ -1,12 +1,4 @@
-"""Training helpers for the Student Success Copilot ML layer.
-
-This module uses multinomial logistic regression. Logistic regression is a good
-coursework choice because it is:
-
-- simple to explain
-- designed for classification
-- still "regression-based" in method and name
-"""
+"""Training helpers for the Student Success Copilot ML layer."""
 
 from __future__ import annotations
 
@@ -45,19 +37,17 @@ class TrainedRiskModel:
 
 
 def build_classifier() -> Pipeline:
-    """Create the logistic regression pipeline used for coursework demos."""
+    """Create a simple logistic regression pipeline.
+
+    The older local sklearn build does not accept the newer ``multi_class``
+    argument used in some generated versions of this file, so the model stays
+    with broadly compatible defaults here.
+    """
     return Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=1000,
-                    multi_class="multinomial",
-                    random_state=42,
-                ),
-            ),
+            ("classifier", LogisticRegression(max_iter=1000)),
         ]
     )
 
@@ -68,7 +58,11 @@ def train_risk_model(
     random_state: int = 42,
 ) -> TrainedRiskModel:
     """Load the dataset, split it, and train the classifier."""
-    dataset = load_historical_data(csv_path)
+    dataset_path = Path(csv_path)
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+    dataset = load_historical_data(dataset_path)
     return train_risk_model_from_dataframe(
         dataset,
         test_size=test_size,
@@ -83,6 +77,10 @@ def train_risk_model_from_dataframe(
 ) -> TrainedRiskModel:
     """Train the classifier from an already loaded DataFrame."""
     X, y = build_training_data(dataframe)
+
+    if len(dataframe) < 6:
+        raise ValueError("The dataset is too small to train and evaluate the model safely.")
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
