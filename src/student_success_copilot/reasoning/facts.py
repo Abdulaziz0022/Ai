@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
 from typing import TypeAlias
 
 from student_success_copilot import config
 from student_success_copilot.models.student_profile import StudentProfile
 from student_success_copilot.models.task import Task
+from student_success_copilot.planning.heuristics import (
+    build_planning_dates,
+    deadline_rank,
+    deadline_slot_count,
+    resolve_days_left,
+)
 
 
 FactStrengths: TypeAlias = dict[str, float]
@@ -23,8 +28,14 @@ def build_initial_facts(profile: StudentProfile) -> FactStrengths:
     high_priority_count = sum(1 for task in profile.tasks if task.priority >= 3)
 
     ordered_days = _ordered_day_names_from_today()
+    planning_dates = build_planning_dates(ordered_days)
     ordered_availability = [float(profile.availability.get(day, 0.0)) for day in ordered_days]
-    deadline_summary = _summarize_deadline_pressure(profile.tasks, ordered_availability)
+    deadline_summary = _summarize_deadline_pressure(
+        profile.tasks,
+        ordered_days,
+        planning_dates,
+        ordered_availability,
+    )
 
     if task_count > 0:
         _add_fact(facts, "has_tasks", 1.0)
@@ -202,20 +213,29 @@ def build_initial_facts(profile: StudentProfile) -> FactStrengths:
 
 def _summarize_deadline_pressure(
     tasks: list[Task],
+    day_names: list[str],
+    planning_dates,
     ordered_availability: list[float],
 ) -> dict[str, float]:
-    """Estimate missed deadline pressure from the next available day slots."""
+    """Estimate missed deadline pressure using the same strict deadline model as the planner."""
     urgent_tasks = 0
     near_deadline_tasks = 0
     missed_hours = 0.0
     urgent_missed_hours = 0.0
     window_overload = 0.0
 
-    resolved_tasks: list[tuple[Task, int | None]] = [
-        (task, _resolve_task_days_left(task)) for task in tasks
-    ]
+    working_availability = list(ordered_availability)
+    task_order = sorted(
+        range(len(tasks)),
+        key=lambda index: (
+            deadline_rank(tasks[index], day_names, planning_dates),
+            -tasks[index].priority,
+            -tasks[index].estimated_hours,
+        ),
+    )
 
-    for task, days_left in resolved_tasks:
+    for task in tasks:
+        days_left = resolve_days_left(task, day_names, planning_dates)
         if days_left is None:
             continue
         if days_left <= 1:
@@ -223,18 +243,40 @@ def _summarize_deadline_pressure(
         if days_left <= 3:
             near_deadline_tasks += 1
 
-        slot_count = max(0, min(len(ordered_availability), days_left))
-        available_before_deadline = sum(ordered_availability[:slot_count])
-        task_missed_hours = max(0.0, task.estimated_hours - available_before_deadline)
-        missed_hours += task_missed_hours
+    for task_index in task_order:
+        task = tasks[task_index]
+        slot_count = deadline_slot_count(task, day_names, planning_dates)
+        if slot_count is None:
+            continue
 
-        if days_left <= 1:
-            urgent_missed_hours += task_missed_hours
+        remaining_hours = float(task.estimated_hours)
+
+        for day_index in range(slot_count):
+            if remaining_hours <= 1e-9:
+                break
+
+            usable_hours = min(remaining_hours, working_availability[day_index])
+            if usable_hours <= 1e-9:
+                continue
+
+            working_availability[day_index] -= usable_hours
+            remaining_hours -= usable_hours
+
+        missed_hours += remaining_hours
+
+        days_left = resolve_days_left(task, day_names, planning_dates)
+        if days_left is not None and days_left <= 1:
+            urgent_missed_hours += remaining_hours
 
     for window in range(1, len(ordered_availability) + 1):
-        tasks_in_window = [
-            task for task, days_left in resolved_tasks if days_left is not None and days_left <= window
-        ]
+        tasks_in_window = []
+        for task in tasks:
+            slot_count = deadline_slot_count(task, day_names, planning_dates)
+            if slot_count is None:
+                continue
+            if slot_count <= window:
+                tasks_in_window.append(task)
+
         if not tasks_in_window:
             continue
 
@@ -245,45 +287,16 @@ def _summarize_deadline_pressure(
     return {
         "urgent_tasks": float(urgent_tasks),
         "near_deadline_tasks": float(near_deadline_tasks),
-        "missed_hours": missed_hours,
-        "urgent_missed_hours": urgent_missed_hours,
+        "missed_hours": max(0.0, missed_hours),
+        "urgent_missed_hours": max(0.0, urgent_missed_hours),
         "window_overload": max(0.0, window_overload),
     }
 
 
-def _resolve_task_days_left(task: Task) -> int | None:
-    """Resolve ``days_left`` directly from the task data."""
-    if task.days_left is not None:
-        return max(0, int(task.days_left))
-
-    cleaned_deadline = task.deadline.strip()
-    today = date.today()
-
-    weekday_offsets = {
-        "monday": 0,
-        "tuesday": 1,
-        "wednesday": 2,
-        "thursday": 3,
-        "friday": 4,
-        "saturday": 5,
-        "sunday": 6,
-    }
-
-    if cleaned_deadline.lower() in weekday_offsets:
-        target_weekday = weekday_offsets[cleaned_deadline.lower()]
-        current_weekday = today.weekday()
-        return (target_weekday - current_weekday) % 7
-
-    try:
-        deadline_date = datetime.strptime(cleaned_deadline, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-    return max(0, (deadline_date - today).days)
-
-
 def _ordered_day_names_from_today() -> list[str]:
     """Return weekday names rotated so the first item is today."""
+    from datetime import date
+
     today_index = date.today().weekday()
     canonical_days = list(config.DEFAULT_STUDY_DAYS)
     return canonical_days[today_index:] + canonical_days[:today_index]

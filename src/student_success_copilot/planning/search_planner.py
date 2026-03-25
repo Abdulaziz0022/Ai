@@ -231,7 +231,11 @@ class SearchPlanner:
         task_index: int,
         state: PlanningState,
     ) -> list[int]:
-        """Return valid day indices for one task."""
+        """Return valid on-time day indices for one task.
+
+        This planner is strict: once the deadline window has passed, the task is
+        left unscheduled instead of being placed into a later session.
+        """
         all_candidate_days = [
             index for index, hours in enumerate(state.available_day_hours) if hours > 1e-9
         ]
@@ -247,26 +251,10 @@ class SearchPlanner:
             )
         ]
 
-        if on_time_days:
-            return sorted(on_time_days)
-
-        late_days = [
-            day_index
-            for day_index in all_candidate_days
-            if is_after_deadline_slot(
-                self.tasks[task_index],
-                day_index,
-                self.day_names,
-                self.planning_dates,
-            )
-        ]
-        return sorted(
-            late_days,
-            key=lambda day_index: self._day_preference_key(task_index, day_index),
-        )
+        return sorted(on_time_days)
 
     def _day_preference_key(self, task_index: int, day_index: int) -> tuple[int, int]:
-        """Prefer earlier on-time slots and heavily separate late slots."""
+        """Prefer earlier on-time slots."""
         task = self.tasks[task_index]
         slot_count = deadline_slot_count(task, self.day_names, self.planning_dates)
 
@@ -335,19 +323,15 @@ class SearchPlanner:
     ) -> None:
         """Add notes for work that misses the deadline window."""
         task_hours_before_deadline: dict[int, float] = {}
-        task_hours_after_deadline: dict[int, float] = {}
 
         for block in final_state.scheduled_blocks:
             task = self.tasks[block.task_index]
-
             if is_after_deadline_slot(task, block.day_index, self.day_names, self.planning_dates):
-                task_hours_after_deadline[block.task_index] = (
-                    task_hours_after_deadline.get(block.task_index, 0.0) + block.hours
-                )
-            else:
-                task_hours_before_deadline[block.task_index] = (
-                    task_hours_before_deadline.get(block.task_index, 0.0) + block.hours
-                )
+                continue
+
+            task_hours_before_deadline[block.task_index] = (
+                task_hours_before_deadline.get(block.task_index, 0.0) + block.hours
+            )
 
         for task_index, task in enumerate(self.tasks):
             slot_count = deadline_slot_count(task, self.day_names, self.planning_dates)
@@ -355,18 +339,12 @@ class SearchPlanner:
                 continue
 
             hours_before_deadline = task_hours_before_deadline.get(task_index, 0.0)
-            hours_after_deadline = task_hours_after_deadline.get(task_index, 0.0)
             missed_deadline_hours = max(0.0, task.estimated_hours - hours_before_deadline)
 
             if missed_deadline_hours > 1e-9:
                 plan.notes.append(
                     f"'{task.title}' could not be fully completed within the next {slot_count} day slot(s). "
                     f"About {missed_deadline_hours:.1f} hour(s) miss the deadline."
-                )
-
-            if hours_after_deadline > 1e-9:
-                plan.notes.append(
-                    f"'{task.title}' has {hours_after_deadline:.1f} hour(s) scheduled after its deadline window."
                 )
 
     def _state_key(self, state: PlanningState) -> tuple[tuple[float, ...], tuple[float, ...]]:
