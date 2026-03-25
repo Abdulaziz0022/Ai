@@ -20,8 +20,8 @@ def collect_student_input() -> StudentProfile:
 
     tasks = _collect_tasks()
     availability = _collect_availability()
-    confidence = _prompt_optional_int("Confidence level (1-10): ")
-    stress = _prompt_optional_int("Stress level (1-10): ")
+    confidence = _prompt_optional_int_in_range("Confidence level (1-10): ", 1, 10)
+    stress = _prompt_optional_int_in_range("Stress level (1-10): ", 1, 10)
     attendance = _prompt_optional_float("Attendance percentage (optional): ")
     quiz_score = _prompt_optional_float("Average quiz score (optional): ")
     time_spent = _prompt_optional_float("Hours already studied this week (optional): ")
@@ -102,7 +102,7 @@ def _collect_tasks() -> list[Task]:
         )
         days_left = _prompt_optional_int("How many days are left until this deadline? ")
         estimated_hours = _prompt_optional_float("Estimated hours: ") or 1.0
-        priority = _prompt_optional_int("Priority (1-3, optional): ") or 2
+        priority = _prompt_optional_int_in_range("Priority (1-3, optional): ", 1, 3) or 2
         tasks.append(
             Task(
                 title=title,
@@ -140,6 +140,29 @@ def _prompt_optional_int(prompt_text: str) -> int | None:
     except ValueError:
         print("Invalid number. Leaving this field blank.")
         return None
+
+
+def _prompt_optional_int_in_range(
+    prompt_text: str,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    """Prompt for an optional integer and re-prompt until it fits the range."""
+    while True:
+        raw_value = input(prompt_text).strip()
+        if raw_value == "":
+            return None
+
+        try:
+            value = int(raw_value)
+        except ValueError:
+            print(f"Please enter a whole number between {minimum} and {maximum}.")
+            continue
+
+        if minimum <= value <= maximum:
+            return value
+
+        print(f"Please enter a value between {minimum} and {maximum}.")
 
 
 def _prompt_optional_float(prompt_text: str) -> float | None:

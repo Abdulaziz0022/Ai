@@ -24,14 +24,22 @@ def parse_deadline_date(
     planning_dates: Sequence[date],
 ) -> date | None:
     """Parse a deadline string as either a weekday name or an ISO date."""
-    cleaned_deadline = deadline.strip()
+    explicit_date = parse_explicit_deadline_date(deadline)
+    if explicit_date is not None:
+        return explicit_date
 
+    cleaned_deadline = deadline.strip()
     for day_name, planning_date in zip(day_names, planning_dates):
         if cleaned_deadline.lower() == day_name.lower():
             return planning_date
 
+    return None
+
+
+def parse_explicit_deadline_date(deadline: str) -> date | None:
+    """Parse only an explicit ISO deadline date like ``2026-03-27``."""
     try:
-        return datetime.strptime(cleaned_deadline, "%Y-%m-%d").date()
+        return datetime.strptime(deadline.strip(), "%Y-%m-%d").date()
     except ValueError:
         return None
 
@@ -41,7 +49,16 @@ def resolve_days_left(
     day_names: Sequence[str],
     planning_dates: Sequence[date],
 ) -> int | None:
-    """Return the non-inclusive day difference until the deadline."""
+    """Return the non-inclusive day difference until the deadline.
+
+    If a real deadline date is present, it always wins over a typed ``days_left``
+    value so scheduling stays calendar-consistent.
+    """
+    explicit_date = parse_explicit_deadline_date(task.deadline)
+    if explicit_date is not None:
+        planning_start = planning_dates[0] if planning_dates else date.today()
+        return max(0, (explicit_date - planning_start).days)
+
     if task.days_left is not None:
         return max(0, int(task.days_left))
 
@@ -64,8 +81,14 @@ def deadline_slot_count(
     - if ``days_left = 1``, allowed slots are today and tomorrow, so slot count is 2
     - if ``days_left = 3``, allowed slots are today plus the next 3 days, so slot count is 4
 
-    For real calendar dates, the deadline day itself is also included.
+    If a real deadline date is present, the date-based result is always used.
     """
+    explicit_date = parse_explicit_deadline_date(task.deadline)
+    if explicit_date is not None:
+        planning_start = planning_dates[0] if planning_dates else date.today()
+        inclusive_days = (explicit_date - planning_start).days + 1
+        return max(0, min(len(planning_dates), inclusive_days))
+
     if task.days_left is not None:
         inclusive_slots = int(task.days_left) + 1
         return max(0, min(len(planning_dates), inclusive_slots))

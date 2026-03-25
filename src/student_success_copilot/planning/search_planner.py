@@ -463,11 +463,7 @@ def _display_days_left(
     day_names: Sequence[str],
     planning_dates: Sequence[date],
 ) -> int | None:
-    """Return a display-friendly remaining days value for one session.
-
-    This value decreases as the plan moves forward through the week. It never
-    goes below zero.
-    """
+    """Return a display-friendly remaining days value for one session."""
     starting_days_left = resolve_days_left(task, day_names, planning_dates)
     if starting_days_left is None:
         return None
