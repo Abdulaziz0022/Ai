@@ -109,7 +109,7 @@ def _build_plans(profile: StudentProfile) -> list[PlanningResult]:
     """Run the search planner strategies and fall back safely if needed."""
     try:
         return compare_strategies(profile)
-    except Exception as error:  # pragma: no cover - defensive fallback
+    except Exception as error:  # no cover - defensive fallback
         fallback_plan = WeeklyStudyPlan()
         fallback_plan.notes.append(f"Planning fallback used because of an error: {error}")
         fallback_state = PlanningState(

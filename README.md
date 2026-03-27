@@ -64,18 +64,3 @@ You can also run one file at a time:
 pytest tests/test_reasoning.py
 ```
 
-## Example Terminal Output
-```text
-------------------------------------------------------------
-Final Result
-------------------------------------------------------------
-Student: Alex
-Final risk level: Medium
-Rule-based risk: Medium
-ML risk: High
-Risk merge note: Rules and ML disagreed, so the system chose the more cautious higher risk level.
-
-Recommendations:
-- Schedule revision sessions for the topics where quiz performance was weakest.
-- Review progress mid-week so you can adjust the plan before deadlines become urgent.
-```
